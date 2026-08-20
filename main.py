@@ -24,7 +24,7 @@ get_current_dayofweek = lambda action: (
 
 
 SLEEPTIME = 0.2  # 每次抢座的间隔
-ENDTIME = "21:01:00"  # 根据学校的预约座位时间+1min即可
+ENDTIME = "20:01:00"  # 根据学校的预约座位时间+1min即可
 
 ENABLE_SLIDER = True  # 是否有滑块验证
 MAX_ATTEMPT = 3  # 最大尝试次数
@@ -82,7 +82,7 @@ def main(users, action=False):
             # 获取当前北京时间
             now = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
             # 一旦到了 21 点（或超过），立刻跳出循环去抢座
-            if now.hour >= 21:
+            if now.hour >= 20:
                 logging.info(f"到达预定时间: {now.strftime('%H:%M:%S')}，开始抢座！")
                 break
             time.sleep(0.1) # 稍微缩短检查间隔，提高精度
