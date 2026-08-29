@@ -24,14 +24,14 @@ get_current_dayofweek = lambda action: (
 
 RUN_ONCE = True
 SLEEPTIME = 0.5  # 每次抢座的间隔
-ENDTIME = "20:02:00"  # 根据学校的预约座位时间+1min即可
+ENDTIME = "23:02:00"  # 根据学校的预约座位时间+1min即可
 RESERVE_TIME = "20:00:00"  # 北京时间
 PREWARM_LEAD_SECONDS = 20  # 正式预约前多少秒完成运行环境和网络预热
 
 ENABLE_SLIDER = True  # 是否有滑块验证
 MAX_ATTEMPT = 1  # 最大尝试次数
 RESERVE_NEXT_DAY = True  # 预约明天而不是今天的
-POST_LOGIN_DELAY = 3.0   # 登录成功后等待2秒
+POST_LOGIN_DELAY = 2.0   # 登录成功后等待2秒
 RETRY_INTERVAL = 15.0    # 整批失败后等待15秒
 
 def create_reserve_clients(user_count):
