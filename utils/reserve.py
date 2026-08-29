@@ -68,7 +68,47 @@ class reserve:
         self.max_attempt = max_attempt
         self.enable_slider = enable_slider
         self.reserve_next_day = reserve_next_day
+        self.logged_in = False
         requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+    def warm_up(self):
+        """Warm heavy libraries and reusable HTTPS connections before login."""
+        started_at = time.perf_counter()
+
+        # The first OpenCV/Numpy import and operation is noticeably slower on a
+        # fresh GitHub runner. Do it before the login-success timer starts.
+        try:
+            import numpy as np
+            import cv2
+
+            sample = np.zeros((32, 32), dtype=np.uint8)
+            cv2.Canny(sample, 100, 200)
+        except Exception as error:
+            logging.warning(f"OpenCV/Numpy warm-up failed: {error}")
+
+        # Establish DNS/TLS connections in the same Session that will be used
+        # for the reservation. A failed root-page response is harmless: opening
+        # the connection is the useful part of this warm-up.
+        warm_urls = (
+            "https://office.chaoxing.com/",
+            "https://captcha.chaoxing.com/",
+            "https://captcha-b.chaoxing.com/",
+        )
+        for url in warm_urls:
+            try:
+                self.requests.get(
+                    url,
+                    headers={"User-Agent": self.headers["User-Agent"]},
+                    timeout=3,
+                    verify=False,
+                )
+            except requests.RequestException as error:
+                logging.debug(f"Connection warm-up failed for {url}: {error}")
+
+        logging.info(
+            f"Runtime and HTTPS connections warmed up in "
+            f"{time.perf_counter() - started_at:.3f}s"
+        )
 
     # login and page token
     def _get_page_token(self, url, require_value=False):
@@ -104,9 +144,11 @@ class reserve:
         jsons = self.requests.post(url=self.login_url, params=parm, verify=False)
         obj = jsons.json()
         if obj["status"]:
+            self.logged_in = True
             logging.info(f"User {username} login successfully")
             return (True, "")
         else:
+            self.logged_in = False
             logging.info(
                 f"User {username} login failed. Please check you password and username! "
             )
@@ -231,43 +273,180 @@ class reserve:
         tl = max_loc
         return tl[0]
 
-    def submit(self, times, roomid, seatid, action):
-        for seat in seatid:
-            suc = False
-            while ~suc and self.max_attempt > 0:
-                token, value = self._get_page_token(
-                    self.url.format(roomid, seat), require_value=True
+    @staticmethod
+    def _normalize_seat_ids(seatid):
+        """Return an ordered, de-duplicated list of seat number strings."""
+        if isinstance(seatid, str):
+            seats = [seatid]
+        elif isinstance(seatid, (list, tuple)):
+            seats = list(seatid)
+        else:
+            raise TypeError("seatid must be a string, list, or tuple")
+
+        normalized = []
+        for seat in seats:
+            if not isinstance(seat, str):
+                raise TypeError("every seatid must be a string, for example '006'")
+            seat = seat.strip()
+            if seat and seat not in normalized:
+                normalized.append(seat)
+
+        if not normalized:
+            raise ValueError("seatid cannot be empty")
+        return normalized
+
+    def submit(
+        self,
+        times,
+        roomid,
+        seatid,
+        action,
+    ):
+        seats = self._normalize_seat_ids(seatid)
+
+        logging.info(
+            f"本次备选座位：{seats}"
+        )
+
+        captcha_count = 0
+        max_captcha_count = len(seats)
+
+        # 每个座位只尝试一次
+        for seat_index, seat in enumerate(seats):
+            logging.info(
+                f"尝试座位 {seat}，"
+                f"进度 {seat_index + 1}/{len(seats)}"
+            )
+
+            token, value = self._get_page_token(
+                self.url.format(
+                    roomid,
+                    seat,
+                ),
+                require_value=True,
+            )
+
+            logging.info(
+                f"Get token: {token}"
+            )
+
+            # 没有token时不生成验证码
+            if not token or not value:
+                logging.warning(
+                    f"座位 {seat} 没有有效token，"
+                    "跳过且不生成验证码"
                 )
-                logging.info(f"Get token: {token}")
-                captcha = self.resolve_captcha() if self.enable_slider else ""
-                logging.info(f"Captcha token {captcha}")
-                suc = self.get_submit(
-                    self.submit_url,
-                    times=times,
-                    token=token,
-                    roomid=roomid,
-                    seatid=seat,
-                    captcha=captcha,
-                    action=action,
-                    value=value,
+
+                if seat_index < len(seats) - 1:
+                    logging.info(
+                        f"等待 {self.sleep_time} 秒后"
+                        "检查下一个座位"
+                    )
+                    time.sleep(self.sleep_time)
+
+                continue
+
+            captcha = ""
+
+            if self.enable_slider:
+                if captcha_count >= max_captcha_count:
+                    logging.warning(
+                        "已达到本轮验证码次数限制，停止"
+                    )
+                    break
+
+                captcha_count += 1
+
+                logging.info(
+                    f"开始生成第 "
+                    f"{captcha_count}/{max_captcha_count} "
+                    "次验证码"
                 )
-                if suc:
-                    return suc
+
+                captcha = self.resolve_captcha()
+
+                # 当前验证码失败，等待后尝试下一个座位
+                if not captcha:
+                    logging.warning(
+                        f"座位 {seat} 验证码失败"
+                    )
+
+                    if seat_index < len(seats) - 1:
+                        logging.info(
+                            f"等待 {self.sleep_time} 秒后"
+                            "尝试下一个座位"
+                        )
+                        time.sleep(self.sleep_time)
+
+                    continue
+
+            logging.info(
+                f"Captcha token {captcha}"
+            )
+
+            success = self.get_submit(
+                self.submit_url,
+                times=times,
+                token=token,
+                roomid=roomid,
+                seatid=seat,
+                captcha=captcha,
+                action=action,
+                value=value,
+            )
+
+            if success:
+                logging.info(
+                    f"座位 {seat} 预约成功"
+                )
+                return True
+
+            logging.info(
+                f"座位 {seat} 预约失败"
+            )
+
+            # 还有下一个座位时才等待
+            if seat_index < len(seats) - 1:
+                logging.info(
+                    f"等待 {self.sleep_time} 秒后"
+                    "尝试下一个座位"
+                )
                 time.sleep(self.sleep_time)
-                self.max_attempt -= 1
-        return suc
+
+        logging.info(
+            f"三个座位均未成功，"
+            f"本轮共生成 {captcha_count} 次验证码，"
+            "任务结束"
+        )
+
+        return False
+
+        logging.warning(
+            "所有座位都没有获取到有效token，"
+            "本次没有生成验证码"
+        )
+
+        return False
 
     def get_submit(
         self, url, times, token, roomid, seatid, captcha="", action=False, value=""
     ):
-        delta_day = 1 if self.reserve_next_day else 0
-        day = datetime.date.today() + datetime.timedelta(
-            days=0 + delta_day
-        )  # 预约今天，修改days=1表示预约明天
+                # GitHub Actions 使用 UTC，先转换成北京时间日期
         if action:
-            day = datetime.date.today() + datetime.timedelta(
-                days=1 + delta_day
-            )  # 由于action时区问题导致其早+8区一天
+            beijing_now = (
+                datetime.datetime.utcnow()
+                + datetime.timedelta(hours=8)
+            )
+            today = beijing_now.date()
+        else:
+            today = datetime.date.today()
+
+        # False 预约当天，True 预约明天
+        delta_day = 1 if self.reserve_next_day else 0
+
+        day = today + datetime.timedelta(
+            days=delta_day
+        )
         parm = {
             "roomId": roomid,
             "startTime": times[0],
