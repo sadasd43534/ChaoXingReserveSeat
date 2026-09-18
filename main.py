@@ -23,7 +23,7 @@ get_current_dayofweek = lambda action: (
 )
 
 RUN_ONCE = True
-SLEEPTIME = 0.5  # 每次抢座的间隔
+SLEEPTIME = 0.3  # 每次抢座的间隔
 ENDTIME = "23:02:00"  # 根据学校的预约座位时间+1min即可
 RESERVE_TIME = "20:00:00"  # 北京时间
 PREWARM_LEAD_SECONDS = 20  # 正式预约前多少秒完成运行环境和网络预热
